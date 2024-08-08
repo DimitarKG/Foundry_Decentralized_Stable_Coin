@@ -56,10 +56,15 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength();
     error DSCEngine__NotAllowedToken();
     error DSCEngine__TransferFailed();
+    error DSCEngine__HealthFactorIsBrokan(uint256);
+    error DSCEngine__MintingFailed();
 
     //state variables
     uint256 private constant ADDITIONAL_FEED_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant LIQUIDATION_THRESHOLD = 50;
+    uint256 private constant LIQUIDATION_PRECISION = 100;
 
     mapping(address token => address priceFeed) private s_priceFeeds;
     mapping(address user => mapping(address token => uint256 amount))
@@ -153,6 +158,10 @@ contract DSCEngine is ReentrancyGuard {
     ) external MoreThanZero(amountDscToMint) nonReentrant {
         s_DSCMinted[msg.sender] += amountDscToMint;
         _revertIfHealthFactorIsBroken(msg.sender);
+        bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+        if (!minted) {
+            revert DSCEngine__MintingFailed();
+        }
     }
 
     function burnDsc() external {}
@@ -183,11 +192,18 @@ contract DSCEngine is ReentrancyGuard {
             uint256 totalDSCMinted,
             uint256 collateralValueInUsd
         ) = _getAccountInfo(user);
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd *
+            LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION; //1000 => 500
+        return (collateralAdjustedForThreshold * PRECISION) / totalDSCMinted;
     }
 
     function _revertIfHealthFactorIsBroken(address user) internal view {
         // does the user have enough collateral?
         // revert if they dont
+        uint256 userHealthFactor = _healthFactor(user);
+        if (userHealthFactor < MIN_HEALTH_FACTOR) {
+            revert DSCEngine__HealthFactorIsBrokan(userHealthFactor);
+        }
     }
 
     // public and external view functions
